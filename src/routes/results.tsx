@@ -1,17 +1,20 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   MapPin, Calendar, Wallet, Users, Sparkles, Download, Share2, Bookmark,
   Hotel, UtensilsCrossed, Package, Lightbulb, Shield, TrendingUp, Sun,
   Send, Bot, User as UserIcon, Loader2, Plane, Clock, Star, Check,
   Landmark, Gem, CloudSun, Phone, Bus, AlertTriangle, Map as MapIcon,
+  Volume2, RefreshCw, Wifi, Coffee, Car as CarIcon, Waves, Droplets,
+  Wind, Sunrise, Sunset, Leaf, Baby, User as SoloIcon, Accessibility,
+  Building2, Train, Zap, Heart, Camera, ThermometerSun,
 } from "lucide-react";
 import { format } from "date-fns";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SiteNav } from "@/components/site-nav";
 import { SiteFooter } from "@/components/site-footer";
-import { loadTripInput, type TripInput } from "@/lib/trip-store";
+import { loadTripInput, formatMoney, type TripInput, type Currency } from "@/lib/trip-store";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -19,33 +22,58 @@ export const Route = createFileRoute("/results")({
   component: ResultsPage,
 });
 
+// ---------- Image helpers (deterministic Unsplash-source style via picsum with seeds) ----------
+const img = (seed: string, w = 800, h = 600) =>
+  `https://picsum.photos/seed/${encodeURIComponent(seed)}/${w}/${h}`;
+
 type Day = { title: string; morning: string; afternoon: string; evening: string; highlight: string };
+type Hotel = { name: string; rating: number; price: number; area: string; tag: string; amenities: string[]; distance: string; image: string };
+type Restaurant = { name: string; cuisine: string; rating: number; cost: number; dishes: string[]; veg: boolean; image: string };
+type Attraction = { name: string; type: string; desc: string; hours: string; fee: number; duration: string; bestTime: string; image: string };
 type Plan = {
   summary: string;
+  smartScore: number;
+  overview: string;
   days: Day[];
   budget: { label: string; amount: number; pct: number }[];
-  hotels: { name: string; rating: number; price: number; area: string; tag: string }[];
-  foods: { name: string; type: string; note: string; veg?: boolean }[];
-  attractions: { name: string; type: string; desc: string }[];
+  flights: { from: string; to: string; airline: string; duration: string; price: number; stops: string }[];
+  hotels: Hotel[];
+  restaurants: Restaurant[];
+  attractions: Attraction[];
   hiddenGems: { name: string; desc: string }[];
   packing: string[];
   tips: string[];
   transportTips: string[];
   safetyTips: string[];
-  emergency: { label: string; number: string }[];
-  weather: { label: string; temp: string; note: string }[];
+  cultureTips: string[];
+  emergency: { label: string; number: string; icon: typeof Phone }[];
+  weather: { temp: number; feelsLike: number; humidity: number; wind: number; rain: number; uv: number; sunrise: string; sunset: string; condition: string };
   totalCost: number;
+  dailyCost: number;
   bestTime: string;
   safety: number;
-  difficulty: "Easy" | "Moderate" | "Challenging";
+  walking: string;
+  crowd: "Low" | "Moderate" | "High";
+  accessibilityScore: number;
+  familyScore: number;
+  soloScore: number;
+  carbonKg: number;
+  aiInsights: string[];
+  heroImage: string;
 };
 
 const LOADING_STEPS = [
-  { emoji: "✈️", text: "Finding the best destinations..." },
-  { emoji: "🏨", text: "Searching hotels..." },
-  { emoji: "🍽", text: "Finding local food..." },
-  { emoji: "📍", text: "Building your itinerary..." },
-  { emoji: "🤖", text: "AI is creating your perfect trip..." },
+  { emoji: "🤖", text: "Understanding your travel preferences..." },
+  { emoji: "🌍", text: "Searching destinations..." },
+  { emoji: "✈️", text: "Finding flights..." },
+  { emoji: "🏨", text: "Finding hotels..." },
+  { emoji: "🍽️", text: "Discovering restaurants..." },
+  { emoji: "📍", text: "Building optimized itinerary..." },
+  { emoji: "🌦️", text: "Checking weather..." },
+  { emoji: "💱", text: "Calculating local currency..." },
+  { emoji: "🧳", text: "Creating packing checklist..." },
+  { emoji: "⭐", text: "Finding hidden gems..." },
+  { emoji: "✨", text: "Almost done..." },
 ];
 
 function buildPlan(t: TripInput): Plan {
@@ -57,8 +85,12 @@ function buildPlan(t: TripInput): Plan {
     "Nature & Scenic Escape", "Adventure Day", "Hidden Gems Tour", "Relaxation & Departure",
     "Coastal Getaway", "Mountain Trek", "Nightlife & Live Music",
   ];
+  const kidFriendly = t.accessibility.includes("Kids Friendly");
   return {
-    summary: `A ${t.days}-day ${t.style.toLowerCase()} adventure through ${dest}, blending ${t.interests.slice(0, 3).join(", ").toLowerCase()} with authentic local moments. Curated for ${t.travelers} traveler${t.travelers > 1 ? "s" : ""} with a $${t.budget.toLocaleString()} budget, staying in ${t.accommodation.toLowerCase()}s and traveling by ${t.transport.toLowerCase()}.`,
+    heroImage: img(`${cityName}-hero`, 1600, 700),
+    summary: `A ${t.days}-day ${t.style.toLowerCase()} adventure through ${dest}, blending ${t.interests.slice(0, 3).join(", ").toLowerCase()} with authentic local moments. Curated for ${t.travelers} traveler${t.travelers > 1 ? "s" : ""}, staying in ${t.accommodation.toLowerCase()}s and traveling by ${t.transport.toLowerCase()}.`,
+    smartScore: 82 + (dest.length % 15),
+    overview: `${cityName} is a captivating blend of tradition and modernity, known for its warm hospitality, rich culinary scene, and remarkable landmarks. Expect a mix of iconic sights, walkable neighborhoods, and unforgettable local flavors.`,
     days: Array.from({ length: t.days }).map((_, i) => ({
       title: themes[i % themes.length],
       morning: `Start with a slow breakfast at a neighborhood cafe, then head to ${["the historic center", "a scenic viewpoint", "a local market", "a hidden temple"][i % 4]}.`,
@@ -73,22 +105,26 @@ function buildPlan(t: TripInput): Plan {
       { label: "Activities", amount: Math.round(t.budget * 0.18), pct: 18 },
       { label: "Miscellaneous", amount: Math.round(t.budget * 0.07), pct: 7 },
     ],
-    hotels: [
-      { name: `The ${cityName} Boutique`, rating: 4.8, price: Math.round(per * 0.5), area: "Old Town", tag: "Editor's pick" },
-      { name: "Riverside Grand Hotel", rating: 4.6, price: Math.round(per * 0.4), area: "City Center", tag: "Best value" },
-      { name: "Skyline Loft Suites", rating: 4.7, price: Math.round(per * 0.55), area: "Downtown", tag: "Rooftop pool" },
+    flights: [
+      { from: t.fromCountry || "Your city", to: cityName, airline: "SkyWings Airlines", duration: "8h 45m", price: Math.round(t.budget * 0.18), stops: "Non-stop" },
+      { from: t.fromCountry || "Your city", to: cityName, airline: "Global Air", duration: "11h 20m", price: Math.round(t.budget * 0.12), stops: "1 stop" },
     ],
-    foods: [
-      { name: "Sunrise Noodle House", type: "Local breakfast", note: "Family-run, cash only, arrive early." },
-      { name: "Mercado Central", type: "Street food market", note: "Try the grilled skewers and fresh juice." },
-      { name: "Chef Amara's Table", type: "Fine dining", note: "Seasonal tasting menu — reserve 2 weeks ahead." },
-      { name: "Café des Voyageurs", type: "Cozy cafe", note: "Best flat white in the neighborhood.", veg: true },
+    hotels: [
+      { name: `The ${cityName} Boutique`, rating: 4.8, price: Math.round(per * 0.5), area: "Old Town", tag: "Editor's pick", amenities: ["Pool", "WiFi", "Breakfast", "Parking"], distance: "0.8 km from center", image: img(`hotel-${cityName}-1`) },
+      { name: "Riverside Grand Hotel", rating: 4.6, price: Math.round(per * 0.4), area: "City Center", tag: "Best value", amenities: ["WiFi", "Breakfast", "Gym"], distance: "0.3 km from center", image: img(`hotel-${cityName}-2`) },
+      { name: "Skyline Loft Suites", rating: 4.7, price: Math.round(per * 0.55), area: "Downtown", tag: "Rooftop pool", amenities: ["Pool", "WiFi", "Bar", "Parking"], distance: "1.2 km from center", image: img(`hotel-${cityName}-3`) },
+    ],
+    restaurants: [
+      { name: "Sunrise Noodle House", cuisine: "Local", rating: 4.7, cost: 15, dishes: ["Hand-pulled noodles", "Braised pork"], veg: false, image: img(`food-${cityName}-1`) },
+      { name: "Mercado Central", cuisine: "Street food", rating: 4.9, cost: 10, dishes: ["Grilled skewers", "Fresh juice"], veg: true, image: img(`food-${cityName}-2`) },
+      { name: "Chef Amara's Table", cuisine: "Fine dining", rating: 4.8, cost: 85, dishes: ["Tasting menu", "Wine pairing"], veg: false, image: img(`food-${cityName}-3`) },
+      { name: "Café des Voyageurs", cuisine: "Cafe", rating: 4.5, cost: 12, dishes: ["Flat white", "Almond croissant"], veg: true, image: img(`food-${cityName}-4`) },
     ],
     attractions: [
-      { name: `${cityName} Grand Cathedral`, type: "Landmark", desc: "13th-century architecture with panoramic bell tower views." },
-      { name: "National Museum of Art", type: "Culture", desc: "World-class collection spanning ancient to contemporary works." },
-      { name: "Riverside Promenade", type: "Scenic", desc: "2 km waterfront walk with cafes, buskers, and sunset views." },
-      { name: "Old Town Bazaar", type: "Shopping", desc: "Centuries-old market with spices, textiles, and artisan crafts." },
+      { name: `${cityName} Grand Cathedral`, type: "Landmark", desc: "13th-century architecture with panoramic bell tower views.", hours: "9:00 – 18:00", fee: 12, duration: "2 hours", bestTime: "Early morning", image: img(`attr-${cityName}-1`) },
+      { name: "National Museum of Art", type: "Culture", desc: "World-class collection spanning ancient to contemporary works.", hours: "10:00 – 20:00", fee: 18, duration: "3 hours", bestTime: "Weekday afternoon", image: img(`attr-${cityName}-2`) },
+      { name: "Riverside Promenade", type: "Scenic", desc: "2 km waterfront walk with cafes, buskers, and sunset views.", hours: "Open 24h", fee: 0, duration: "1.5 hours", bestTime: "Sunset", image: img(`attr-${cityName}-3`) },
+      { name: "Old Town Bazaar", type: "Shopping", desc: "Centuries-old market with spices, textiles, and artisan crafts.", hours: "8:00 – 22:00", fee: 0, duration: "2 hours", bestTime: "Late morning", image: img(`attr-${cityName}-4`) },
     ],
     hiddenGems: [
       { name: "Rooftop Jazz at Casa Luz", desc: "Speakeasy above a bookshop — live sets Thu–Sun, locals only." },
@@ -113,27 +149,45 @@ function buildPlan(t: TripInput): Plan {
       "Airport express train runs every 15 min from Terminal 1.",
     ],
     safetyTips: [
-      "Pickpocketing is the main concern in tourist areas — use a front pocket or crossbody bag.",
+      "Pickpocketing is the main concern in tourist areas — use a crossbody bag.",
       "Tap water is safe to drink in the city center.",
       "Avoid unlicensed taxis at night — use ride apps instead.",
       "Register with your embassy if staying more than 30 days.",
     ],
+    cultureTips: [
+      "Greet elders first — a slight bow is appreciated.",
+      "Remove shoes before entering homes and some temples.",
+      "Tipping ~10% is common but not mandatory in restaurants.",
+      "Dress modestly at religious sites — cover shoulders and knees.",
+    ],
     emergency: [
-      { label: "General emergency", number: "112" },
-      { label: "Police", number: "110" },
-      { label: "Ambulance", number: "115" },
-      { label: "Tourist helpline", number: "+1 800 555 0199" },
+      { label: "Police", number: "110", icon: Shield },
+      { label: "Hospital", number: "112", icon: Heart },
+      { label: "Ambulance", number: "115", icon: Zap },
+      { label: "Embassy", number: "+1 800 555 0100", icon: Building2 },
+      { label: "Tourist Helpline", number: "+1 800 555 0199", icon: Phone },
     ],
-    weather: [
-      { label: "Morning", temp: "18°C", note: "Cool & breezy" },
-      { label: "Afternoon", temp: "26°C", note: "Sunny with light clouds" },
-      { label: "Evening", temp: "20°C", note: "Mild, light jacket" },
-      { label: "Rain chance", temp: "15%", note: "Mostly dry week" },
-    ],
+    weather: {
+      temp: 24, feelsLike: 26, humidity: 62, wind: 12, rain: 15, uv: 6,
+      sunrise: "06:12", sunset: "19:48", condition: "Sunny with light clouds",
+    },
     totalCost: t.budget,
+    dailyCost: Math.round(t.budget / Math.max(1, t.days)),
     bestTime: ["March – May (mild spring)", "September – November (crisp autumn)", "December – February (festive season)"][dest.length % 3],
     safety: 82 + (dest.length % 15),
-    difficulty: (["Easy", "Moderate", "Challenging"] as const)[t.interests.includes("Adventure") ? 1 : 0],
+    walking: "~5.2 km/day",
+    crowd: (["Low", "Moderate", "High"] as const)[dest.length % 3],
+    accessibilityScore: t.accessibility.includes("Wheelchair Friendly") ? 88 : 72,
+    familyScore: kidFriendly ? 92 : 78,
+    soloScore: t.style === "Solo" ? 94 : 80,
+    carbonKg: Math.round(t.days * 45 + (t.transport === "Flight" ? 800 : 200)),
+    aiInsights: [
+      `You save approximately ${formatMoney(Math.round(t.budget * 0.08), t.currency)} by travelling on weekdays.`,
+      "This itinerary avoids heavy traffic hotspots between 5–7pm.",
+      "Best photography spots (sunset viewpoint & old town alleys) are included.",
+      "Weather is ideal — mostly sunny with low rain probability.",
+      `This plan strongly matches your interests: ${t.interests.slice(0, 3).join(", ")}.`,
+    ],
   };
 }
 
@@ -143,6 +197,7 @@ function ResultsPage() {
   const [loading, setLoading] = useState(true);
   const [step, setStep] = useState(0);
   const [plan, setPlan] = useState<Plan | null>(null);
+  const [regenKey, setRegenKey] = useState(0);
 
   useEffect(() => {
     const t = loadTripInput();
@@ -151,6 +206,8 @@ function ResultsPage() {
       return;
     }
     setInput(t);
+    setLoading(true);
+    setStep(0);
     let i = 0;
     const timer = setInterval(() => {
       i++;
@@ -161,15 +218,21 @@ function ResultsPage() {
       } else {
         setStep(i);
       }
-    }, 800);
+    }, 550);
     return () => clearInterval(timer);
-  }, [navigate]);
+  }, [navigate, regenKey]);
+
+  const regenerate = () => {
+    setPlan(null);
+    setRegenKey((k) => k + 1);
+    toast.success("Regenerating your itinerary...");
+  };
 
   if (loading || !input || !plan) {
     return (
       <div className="min-h-screen bg-background">
         <SiteNav />
-        <div className="mx-auto max-w-2xl px-4 py-24 text-center">
+        <div className="mx-auto max-w-2xl px-4 py-16 sm:py-24 text-center">
           <div className="relative inline-block">
             <div className="absolute inset-0 bg-gradient-primary blur-3xl opacity-40 animate-pulse" />
             <div className="relative grid h-24 w-24 mx-auto place-items-center rounded-3xl bg-gradient-primary shadow-elegant animate-float">
@@ -179,11 +242,11 @@ function ResultsPage() {
           <h2 className="mt-10 text-3xl font-bold font-display">Crafting your journey</h2>
           <p className="mt-2 text-muted-foreground">Our AI is designing an experience just for you.</p>
 
-          <div className="mt-10 max-w-md mx-auto space-y-3 text-left">
+          <div className="mt-10 max-w-md mx-auto space-y-2.5 text-left">
             {LOADING_STEPS.map((s, i) => (
               <div key={s.text} className={cn(
-                "flex items-center gap-3 rounded-xl border border-border bg-card p-3 transition-all animate-fade-in",
-                i < step ? "opacity-100" : i === step ? "opacity-100 shadow-soft border-primary/40" : "opacity-40",
+                "flex items-center gap-3 rounded-xl border border-border bg-card p-3 transition-all",
+                i < step ? "opacity-100" : i === step ? "opacity-100 shadow-soft border-primary/40 scale-[1.02]" : "opacity-40",
               )}>
                 {i < step ? (
                   <div className="grid h-6 w-6 place-items-center rounded-full bg-primary/10">
@@ -204,10 +267,11 @@ function ResultsPage() {
     );
   }
 
-  return <ResultsDashboard input={input} plan={plan} setPlan={setPlan} />;
+  return <ResultsDashboard input={input} plan={plan} setPlan={setPlan} onRegenerate={regenerate} />;
 }
 
-function ResultsDashboard({ input, plan, setPlan }: { input: TripInput; plan: Plan; setPlan: (p: Plan) => void }) {
+function ResultsDashboard({ input, plan, setPlan, onRegenerate }: { input: TripInput; plan: Plan; setPlan: (p: Plan) => void; onRegenerate: () => void }) {
+  const cur = input.currency;
   const dateRange = input.startDate && input.endDate
     ? `${format(new Date(input.startDate), "MMM d")} – ${format(new Date(input.endDate), "MMM d, yyyy")}`
     : `${input.days} days`;
@@ -217,48 +281,144 @@ function ResultsDashboard({ input, plan, setPlan }: { input: TripInput; plan: Pl
     toast.success("Preparing PDF — use your browser's Save as PDF option.");
   };
 
+  const speak = () => {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      return toast.error("Voice not supported in this browser");
+    }
+    const u = new SpeechSynthesisUtterance(`Your ${input.days} day trip to ${input.destination}. ${plan.summary}`);
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(u);
+    toast.success("Reading your trip aloud...");
+  };
+
   return (
     <div className="min-h-screen bg-background">
       <SiteNav />
-      <div className="mx-auto max-w-7xl px-4 sm:px-6 py-8 lg:py-12">
-        {/* Header */}
-        <div className="rounded-3xl bg-gradient-hero border border-border p-6 sm:p-8 shadow-soft animate-fade-in">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div className="min-w-0">
-              <div className="inline-flex items-center gap-2 rounded-full bg-card border border-border px-3 py-1 text-xs font-medium">
-                <Sparkles className="h-3.5 w-3.5 text-primary" /> AI-generated itinerary
-              </div>
-              <h1 className="mt-3 text-3xl sm:text-4xl font-extrabold tracking-tight flex flex-wrap items-center gap-2">
-                <MapPin className="h-8 w-8 text-primary shrink-0" />
-                <span className="truncate">{input.destination}</span>
-              </h1>
-              <p className="mt-3 max-w-2xl text-muted-foreground leading-relaxed">{plan.summary}</p>
-              <div className="mt-5 flex flex-wrap gap-2">
-                <Chip icon={Calendar}>{dateRange}</Chip>
-                <Chip icon={Users}>{input.travelers} traveler{input.travelers > 1 ? "s" : ""}</Chip>
-                <Chip icon={Wallet}>${input.budget.toLocaleString()}</Chip>
-                <Chip icon={Sparkles}>{input.style}</Chip>
-                {input.interests.slice(0, 3).map((i) => <Chip key={i}>{i}</Chip>)}
-              </div>
+      <div className="mx-auto max-w-7xl px-4 sm:px-6 py-6 lg:py-10">
+        {/* Hero */}
+        <div className="relative overflow-hidden rounded-3xl border border-border shadow-elegant animate-fade-in">
+          <img src={plan.heroImage} alt={input.destination} className="absolute inset-0 h-full w-full object-cover" />
+          <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/40 to-black/10" />
+          <div className="relative p-6 sm:p-10 min-h-[280px] sm:min-h-[340px] flex flex-col justify-end text-white">
+            <div className="inline-flex items-center gap-2 rounded-full bg-white/15 backdrop-blur border border-white/20 px-3 py-1 text-xs font-medium w-fit">
+              <Sparkles className="h-3.5 w-3.5" /> AI-generated itinerary
+            </div>
+            <h1 className="mt-3 text-3xl sm:text-5xl font-extrabold tracking-tight flex items-center gap-2">
+              <MapPin className="h-7 w-7 shrink-0" />
+              <span className="truncate">{input.destination}</span>
+            </h1>
+            <p className="mt-3 max-w-2xl text-white/90 leading-relaxed text-sm sm:text-base">{plan.summary}</p>
+            <div className="mt-5 flex flex-wrap gap-2">
+              <HeroChip icon={Calendar}>{dateRange}</HeroChip>
+              <HeroChip icon={Users}>{input.travelers} traveler{input.travelers > 1 ? "s" : ""}</HeroChip>
+              <HeroChip icon={Wallet}>{formatMoney(input.budget, cur)}</HeroChip>
+              <HeroChip icon={Sparkles}>{input.style}</HeroChip>
             </div>
           </div>
         </div>
 
-        {/* Quick stats */}
-        <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <StatCard icon={Wallet} label="Estimated Total" value={`$${plan.totalCost.toLocaleString()}`} accent="text-primary" />
-          <StatCard icon={Sun} label="Best time to visit" value={plan.bestTime} small />
-          <StatCard icon={Shield} label="Safety score" value={`${plan.safety}/100`} accent="text-emerald-500" />
-          <StatCard icon={TrendingUp} label="Difficulty" value={plan.difficulty} />
+        {/* Action bar */}
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button size="sm" onClick={handlePDF} className="bg-gradient-primary shadow-soft"><Download className="mr-1.5 h-4 w-4" />PDF</Button>
+          <Button size="sm" variant="outline" onClick={() => {
+            if (typeof window !== "undefined") {
+              const saved = JSON.parse(localStorage.getItem("tg-saved-trips") || "[]");
+              saved.push({ id: Date.now(), input, savedAt: new Date().toISOString() });
+              localStorage.setItem("tg-saved-trips", JSON.stringify(saved));
+            }
+            toast.success("Trip saved to your library");
+          }}><Bookmark className="mr-1.5 h-4 w-4" />Save</Button>
+          <Button size="sm" variant="outline" onClick={() => {
+            if (typeof navigator !== "undefined" && navigator.share) {
+              navigator.share({ title: "My TripGenie trip", text: `${input.days}-day trip to ${input.destination}!`, url: window.location.href }).catch(() => {});
+            } else if (typeof navigator !== "undefined") {
+              navigator.clipboard?.writeText(window.location.href);
+              toast.success("Link copied");
+            }
+          }}><Share2 className="mr-1.5 h-4 w-4" />Share</Button>
+          <Button size="sm" variant="outline" onClick={onRegenerate}><RefreshCw className="mr-1.5 h-4 w-4" />Regenerate</Button>
+          <Button size="sm" variant="outline" onClick={speak}><Volume2 className="mr-1.5 h-4 w-4" />Listen to My Trip</Button>
         </div>
 
-        <div className="mt-8 grid gap-6 lg:grid-cols-3">
+        {/* Smart score band */}
+        <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <ScoreCard icon={Sparkles} label="Travel Smart Score" value={`${plan.smartScore}`} suffix="/100" color="from-primary to-primary-glow" />
+          <ScoreCard icon={Shield} label="Safety Score" value={`${plan.safety}`} suffix="/100" color="from-emerald-500 to-teal-400" />
+          <ScoreCard icon={Accessibility} label="Accessibility" value={`${plan.accessibilityScore}`} suffix="/100" color="from-blue-500 to-sky-400" />
+          <ScoreCard icon={Leaf} label="Carbon Footprint" value={`${plan.carbonKg}`} suffix=" kg CO₂" color="from-lime-500 to-emerald-400" />
+        </div>
+
+        {/* Quick stats */}
+        <div className="mt-4 grid gap-3 grid-cols-2 lg:grid-cols-4">
+          <MiniStat icon={Wallet} label="Total" value={formatMoney(plan.totalCost, cur)} />
+          <MiniStat icon={TrendingUp} label="Daily avg" value={formatMoney(plan.dailyCost, cur)} />
+          <MiniStat icon={CarIcon} label="Walking" value={plan.walking} />
+          <MiniStat icon={Users} label="Crowd" value={plan.crowd} />
+          <MiniStat icon={Baby} label="Family" value={`${plan.familyScore}/100`} />
+          <MiniStat icon={SoloIcon} label="Solo" value={`${plan.soloScore}/100`} />
+          <MiniStat icon={Sun} label="Best time" value={plan.bestTime.split(" (")[0]} />
+          <MiniStat icon={ThermometerSun} label="Weather" value={`${plan.weather.temp}°C`} />
+        </div>
+
+        {/* Destination overview */}
+        <Section title="Destination overview" icon={Landmark} className="mt-6">
+          <p className="text-sm text-muted-foreground leading-relaxed">{plan.overview}</p>
+        </Section>
+
+        {/* AI Insights */}
+        <Section title="AI Insights" icon={Sparkles} className="mt-6" gradient>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {plan.aiInsights.map((i, idx) => (
+              <div key={idx} className="flex gap-3 rounded-xl bg-card/70 backdrop-blur border border-border p-3 hover:-translate-y-0.5 transition-all">
+                <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-gradient-primary text-primary-foreground shadow-soft">
+                  <Sparkles className="h-4 w-4" />
+                </div>
+                <p className="text-sm leading-relaxed">{i}</p>
+              </div>
+            ))}
+          </div>
+        </Section>
+
+        <div className="mt-6 grid gap-6 lg:grid-cols-3">
           <div className="lg:col-span-2 space-y-6">
+            {/* Flights */}
+            <Section title="Flights summary" icon={Plane}>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {plan.flights.map((f, i) => (
+                  <div key={i} className="rounded-2xl border border-border bg-card p-4 hover:shadow-soft transition-all">
+                    <div className="flex items-center justify-between text-xs text-muted-foreground">
+                      <span className="font-semibold text-foreground">{f.airline}</span>
+                      <span className="rounded-full bg-secondary px-2 py-0.5">{f.stops}</span>
+                    </div>
+                    <div className="mt-3 flex items-center justify-between">
+                      <div>
+                        <div className="text-lg font-bold">{f.from}</div>
+                        <div className="text-[10px] text-muted-foreground uppercase">Origin</div>
+                      </div>
+                      <div className="flex-1 mx-3 flex items-center gap-1">
+                        <div className="h-px flex-1 bg-border" />
+                        <Plane className="h-3.5 w-3.5 text-primary rotate-90" />
+                        <div className="h-px flex-1 bg-border" />
+                      </div>
+                      <div className="text-right">
+                        <div className="text-lg font-bold">{f.to}</div>
+                        <div className="text-[10px] text-muted-foreground uppercase">Destination</div>
+                      </div>
+                    </div>
+                    <div className="mt-3 flex items-center justify-between text-sm">
+                      <span className="text-muted-foreground">{f.duration}</span>
+                      <span className="font-bold text-primary">{formatMoney(f.price, cur)}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Section>
+
             {/* Itinerary */}
             <Section title="Day-by-day itinerary" icon={Calendar}>
               <div className="space-y-4">
                 {plan.days.map((d, i) => (
-                  <div key={i} className="rounded-2xl border border-border bg-card p-5 hover:shadow-soft transition-all">
+                  <div key={i} className="rounded-2xl border border-border bg-card p-5 hover:shadow-soft hover:-translate-y-0.5 transition-all">
                     <div className="flex items-start justify-between flex-wrap gap-2">
                       <div className="flex items-center gap-3">
                         <div className="grid h-11 w-11 place-items-center rounded-xl bg-gradient-primary text-primary-foreground font-bold shadow-soft">
@@ -288,7 +448,7 @@ function ResultsDashboard({ input, plan, setPlan }: { input: TripInput; plan: Pl
                   <div key={b.label}>
                     <div className="flex justify-between text-sm mb-1.5">
                       <span className="font-medium">{b.label}</span>
-                      <span className="text-muted-foreground tabular-nums">${b.amount.toLocaleString()} • {b.pct}%</span>
+                      <span className="text-muted-foreground tabular-nums">{formatMoney(b.amount, cur)} • {b.pct}%</span>
                     </div>
                     <div className="h-2 rounded-full bg-secondary overflow-hidden">
                       <div className="h-full bg-gradient-primary rounded-full transition-all" style={{ width: `${b.pct}%` }} />
@@ -297,22 +457,34 @@ function ResultsDashboard({ input, plan, setPlan }: { input: TripInput; plan: Pl
                 ))}
                 <div className="pt-3 mt-3 border-t border-border flex justify-between text-sm">
                   <span className="font-semibold">Total</span>
-                  <span className="font-bold text-primary tabular-nums">${plan.totalCost.toLocaleString()}</span>
+                  <span className="font-bold text-primary tabular-nums">{formatMoney(plan.totalCost, cur)}</span>
                 </div>
               </div>
             </Section>
 
-            {/* Top Attractions */}
-            <Section title="Top attractions" icon={Landmark}>
-              <div className="grid gap-3 sm:grid-cols-2">
+            {/* Hotels */}
+            <Section title="Hotel recommendations" icon={Hotel}>
+              <div className="grid gap-4 sm:grid-cols-2">
+                {plan.hotels.map((h) => (
+                  <HotelCard key={h.name} h={h} currency={cur} />
+                ))}
+              </div>
+            </Section>
+
+            {/* Restaurants */}
+            <Section title="Restaurant recommendations" icon={UtensilsCrossed}>
+              <div className="grid gap-4 sm:grid-cols-2">
+                {plan.restaurants.map((r) => (
+                  <RestaurantCard key={r.name} r={r} currency={cur} />
+                ))}
+              </div>
+            </Section>
+
+            {/* Attractions */}
+            <Section title="Top tourist attractions" icon={Landmark}>
+              <div className="grid gap-4 sm:grid-cols-2">
                 {plan.attractions.map((a) => (
-                  <div key={a.name} className="rounded-xl border border-border bg-card p-4 hover:shadow-soft transition-all">
-                    <div className="flex items-center justify-between">
-                      <h4 className="font-semibold text-sm">{a.name}</h4>
-                      <span className="text-[10px] rounded-full bg-secondary px-2 py-0.5">{a.type}</span>
-                    </div>
-                    <p className="mt-1.5 text-xs text-muted-foreground leading-relaxed">{a.desc}</p>
-                  </div>
+                  <AttractionCard key={a.name} a={a} currency={cur} />
                 ))}
               </div>
             </Section>
@@ -321,7 +493,7 @@ function ResultsDashboard({ input, plan, setPlan }: { input: TripInput; plan: Pl
             <Section title="Hidden gems" icon={Gem}>
               <div className="space-y-3">
                 {plan.hiddenGems.map((g) => (
-                  <div key={g.name} className="flex gap-3 rounded-xl border border-border bg-gradient-hero p-4">
+                  <div key={g.name} className="flex gap-3 rounded-xl border border-border bg-gradient-hero p-4 hover:-translate-y-0.5 transition-all">
                     <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-gradient-primary text-primary-foreground shadow-soft">
                       <Gem className="h-4 w-4" />
                     </div>
@@ -334,88 +506,76 @@ function ResultsDashboard({ input, plan, setPlan }: { input: TripInput; plan: Pl
               </div>
             </Section>
 
-            {/* Hotels */}
-            <Section title="Recommended hotels" icon={Hotel}>
-              <div className="grid gap-4 sm:grid-cols-3">
-                {plan.hotels.map((h) => (
-                  <div key={h.name} className="rounded-2xl border border-border bg-card p-4 hover:shadow-elegant hover:-translate-y-1 transition-all">
-                    <div className="aspect-video rounded-xl bg-gradient-mesh mb-3 relative overflow-hidden">
-                      <span className="absolute top-2 left-2 rounded-full bg-card/90 backdrop-blur px-2 py-0.5 text-[10px] font-semibold">{h.tag}</span>
-                    </div>
-                    <h4 className="font-semibold text-sm">{h.name}</h4>
-                    <div className="mt-1 flex items-center justify-between text-xs text-muted-foreground">
-                      <span className="inline-flex items-center gap-1"><Star className="h-3 w-3 fill-yellow-500 text-yellow-500" />{h.rating}</span>
-                      <span>{h.area}</span>
-                    </div>
-                    <div className="mt-2 text-sm font-bold text-primary">${h.price}<span className="text-xs text-muted-foreground font-normal"> /night</span></div>
-                  </div>
-                ))}
-              </div>
-            </Section>
-
-            {/* Food */}
-            <Section title="Recommended restaurants" icon={UtensilsCrossed}>
-              <div className="grid gap-3 sm:grid-cols-2">
-                {plan.foods.map((f) => (
-                  <div key={f.name} className="rounded-xl border border-border bg-card p-4">
-                    <div className="flex items-center justify-between gap-2">
-                      <h4 className="font-semibold text-sm truncate">{f.name}</h4>
-                      <span className="text-[10px] rounded-full bg-secondary px-2 py-0.5 shrink-0">
-                        {f.veg ? "🌱 " : ""}{f.type}
-                      </span>
-                    </div>
-                    <p className="mt-1.5 text-xs text-muted-foreground leading-relaxed">{f.note}</p>
-                  </div>
-                ))}
-              </div>
-            </Section>
-
-            {/* Map placeholder */}
-            <Section title="Interactive map" icon={MapIcon}>
-              <div className="relative aspect-[16/8] rounded-2xl overflow-hidden bg-gradient-mesh border border-border">
-                <div className="absolute inset-0 opacity-40" style={{
-                  backgroundImage: "radial-gradient(circle at 25% 40%, oklch(0.7 0.16 240 / 0.4), transparent 40%), radial-gradient(circle at 70% 60%, oklch(0.75 0.14 200 / 0.4), transparent 40%)",
+            {/* Map */}
+            <Section title="Google Maps preview" icon={MapIcon}>
+              <div className="relative aspect-[16/9] rounded-2xl overflow-hidden bg-gradient-mesh border border-border">
+                <div className="absolute inset-0 opacity-70" style={{
+                  backgroundImage: `
+                    linear-gradient(oklch(0.85 0.1 245 / 0.15) 1px, transparent 1px),
+                    linear-gradient(90deg, oklch(0.85 0.1 245 / 0.15) 1px, transparent 1px),
+                    radial-gradient(circle at 25% 40%, oklch(0.7 0.16 240 / 0.35), transparent 45%),
+                    radial-gradient(circle at 70% 60%, oklch(0.75 0.14 200 / 0.35), transparent 45%)
+                  `,
+                  backgroundSize: "40px 40px, 40px 40px, 100% 100%, 100% 100%",
                 }} />
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <div className="text-center bg-card/80 backdrop-blur px-6 py-4 rounded-2xl border border-border shadow-soft">
-                    <MapIcon className="h-8 w-8 text-primary mx-auto" />
-                    <div className="mt-2 font-semibold text-sm">{input.destination}</div>
-                    <div className="text-xs text-muted-foreground">Interactive map preview</div>
-                  </div>
-                </div>
                 {[
-                  { top: "22%", left: "18%" }, { top: "40%", left: "62%" },
-                  { top: "68%", left: "35%" }, { top: "55%", left: "80%" },
-                ].map((pos, i) => (
-                  <div key={i} className="absolute" style={pos}>
-                    <div className="relative">
-                      <div className="absolute inset-0 bg-primary rounded-full animate-ping opacity-40" />
-                      <div className="relative grid h-6 w-6 place-items-center rounded-full bg-gradient-primary text-primary-foreground text-[10px] font-bold shadow-elegant">
-                        {i + 1}
+                  { top: "18%", left: "22%", label: "Hotel", icon: Hotel, color: "bg-blue-500" },
+                  { top: "38%", left: "58%", label: "Restaurant", icon: UtensilsCrossed, color: "bg-orange-500" },
+                  { top: "62%", left: "30%", label: "Attraction", icon: Landmark, color: "bg-primary" },
+                  { top: "50%", left: "78%", label: "Restaurant", icon: UtensilsCrossed, color: "bg-orange-500" },
+                  { top: "78%", left: "60%", label: "Airport", icon: Plane, color: "bg-slate-700" },
+                  { top: "28%", left: "82%", label: "Railway", icon: Train, color: "bg-emerald-600" },
+                ].map((m, i) => (
+                  <div key={i} className="absolute -translate-x-1/2 -translate-y-1/2" style={{ top: m.top, left: m.left }}>
+                    <div className="relative group">
+                      <div className={cn("absolute inset-0 rounded-full animate-ping opacity-40", m.color)} />
+                      <div className={cn("relative grid h-9 w-9 place-items-center rounded-full text-white shadow-elegant", m.color)}>
+                        <m.icon className="h-4 w-4" />
+                      </div>
+                      <div className="absolute left-1/2 -translate-x-1/2 top-full mt-1 rounded bg-card px-2 py-0.5 text-[10px] font-medium shadow-soft border border-border whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">
+                        {m.label}
                       </div>
                     </div>
                   </div>
                 ))}
+                <div className="absolute bottom-3 right-3 rounded-lg bg-card/90 backdrop-blur border border-border px-3 py-1.5 text-[10px] font-medium shadow-soft">
+                  Interactive preview • {input.destination}
+                </div>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2 text-[10px]">
+                {[["Hotel", "bg-blue-500"], ["Restaurant", "bg-orange-500"], ["Attraction", "bg-primary"], ["Airport", "bg-slate-700"], ["Railway", "bg-emerald-600"]].map(([l, c]) => (
+                  <span key={l} className="inline-flex items-center gap-1.5 rounded-full bg-secondary px-2 py-0.5 font-medium">
+                    <span className={cn("h-2 w-2 rounded-full", c)} /> {l}
+                  </span>
+                ))}
               </div>
             </Section>
 
-            {/* Weather */}
-            <Section title="Weather summary" icon={CloudSun}>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                {plan.weather.map((w) => (
-                  <div key={w.label} className="rounded-xl border border-border bg-gradient-hero p-4 text-center">
-                    <div className="text-xs uppercase tracking-wider text-muted-foreground font-semibold">{w.label}</div>
-                    <div className="mt-1 text-2xl font-bold font-display text-primary">{w.temp}</div>
-                    <div className="text-xs text-muted-foreground mt-1">{w.note}</div>
+            {/* Weather widget */}
+            <Section title="Weather" icon={CloudSun}>
+              <div className="rounded-2xl bg-gradient-to-br from-primary/10 via-transparent to-primary/5 border border-border p-5">
+                <div className="flex items-start justify-between flex-wrap gap-4">
+                  <div>
+                    <div className="text-5xl font-black font-display text-primary tabular-nums">{plan.weather.temp}°</div>
+                    <div className="text-sm text-muted-foreground mt-1">{plan.weather.condition}</div>
+                    <div className="text-xs text-muted-foreground mt-0.5">Feels like {plan.weather.feelsLike}°C</div>
                   </div>
-                ))}
+                  <div className="grid grid-cols-2 gap-2 flex-1 min-w-[220px]">
+                    <WeatherStat icon={Droplets} label="Humidity" value={`${plan.weather.humidity}%`} />
+                    <WeatherStat icon={Wind} label="Wind" value={`${plan.weather.wind} km/h`} />
+                    <WeatherStat icon={CloudSun} label="Rain" value={`${plan.weather.rain}%`} />
+                    <WeatherStat icon={Sun} label="UV" value={`${plan.weather.uv}`} />
+                    <WeatherStat icon={Sunrise} label="Sunrise" value={plan.weather.sunrise} />
+                    <WeatherStat icon={Sunset} label="Sunset" value={plan.weather.sunset} />
+                  </div>
+                </div>
               </div>
             </Section>
           </div>
 
           {/* Sidebar */}
           <div className="space-y-6">
-            <ChatAssistant plan={plan} setPlan={setPlan} />
+            <ChatAssistant plan={plan} setPlan={setPlan} currency={cur} />
 
             <Section title="Packing checklist" icon={Package} compact>
               <ul className="space-y-2 text-sm">
@@ -432,8 +592,17 @@ function ResultsDashboard({ input, plan, setPlan }: { input: TripInput; plan: Pl
               <ul className="space-y-3 text-sm">
                 {plan.transportTips.map((t) => (
                   <li key={t} className="flex items-start gap-2 text-muted-foreground leading-relaxed">
-                    <span className="text-primary mt-0.5">•</span>
-                    <span>{t}</span>
+                    <span className="text-primary mt-0.5">•</span><span>{t}</span>
+                  </li>
+                ))}
+              </ul>
+            </Section>
+
+            <Section title="Cultural etiquette" icon={Camera} compact>
+              <ul className="space-y-3 text-sm">
+                {plan.cultureTips.map((t) => (
+                  <li key={t} className="flex items-start gap-2 text-muted-foreground leading-relaxed">
+                    <span className="text-primary mt-0.5">•</span><span>{t}</span>
                   </li>
                 ))}
               </ul>
@@ -454,8 +623,7 @@ function ResultsDashboard({ input, plan, setPlan }: { input: TripInput; plan: Pl
               <ul className="space-y-3 text-sm">
                 {plan.tips.map((t) => (
                   <li key={t} className="flex items-start gap-2 text-muted-foreground leading-relaxed">
-                    <span className="text-primary mt-0.5">•</span>
-                    <span>{t}</span>
+                    <span className="text-primary mt-0.5">•</span><span>{t}</span>
                   </li>
                 ))}
               </ul>
@@ -464,42 +632,15 @@ function ResultsDashboard({ input, plan, setPlan }: { input: TripInput; plan: Pl
             <Section title="Emergency contacts" icon={Phone} compact>
               <ul className="space-y-2 text-sm">
                 {plan.emergency.map((e) => (
-                  <li key={e.label} className="flex items-center justify-between rounded-lg bg-secondary/60 px-3 py-2">
-                    <span className="text-xs text-muted-foreground">{e.label}</span>
-                    <a href={`tel:${e.number}`} className="font-bold text-primary tabular-nums">{e.number}</a>
+                  <li key={e.label} className="flex items-center justify-between rounded-lg bg-secondary/60 px-3 py-2 hover:bg-secondary transition-colors">
+                    <span className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+                      <e.icon className="h-3.5 w-3.5 text-primary" />{e.label}
+                    </span>
+                    <a href={`tel:${e.number}`} className="font-bold text-primary tabular-nums text-xs">{e.number}</a>
                   </li>
                 ))}
               </ul>
             </Section>
-
-            <div className="rounded-2xl border border-border bg-card p-5 shadow-soft">
-              <h3 className="font-semibold flex items-center gap-2"><Download className="h-4 w-4 text-primary" />Save your trip</h3>
-              <div className="mt-4 space-y-2">
-                <Button className="w-full bg-gradient-primary shadow-soft" onClick={handlePDF}>
-                  <Download className="mr-2 h-4 w-4" /> Download PDF
-                </Button>
-                <Button variant="outline" className="w-full" onClick={() => {
-                  if (typeof window !== "undefined") {
-                    const saved = JSON.parse(localStorage.getItem("tg-saved-trips") || "[]");
-                    saved.push({ id: Date.now(), input, savedAt: new Date().toISOString() });
-                    localStorage.setItem("tg-saved-trips", JSON.stringify(saved));
-                  }
-                  toast.success("Trip saved to your library");
-                }}>
-                  <Bookmark className="mr-2 h-4 w-4" /> Save Trip
-                </Button>
-                <Button variant="outline" className="w-full" onClick={() => {
-                  if (typeof navigator !== "undefined" && navigator.share) {
-                    navigator.share({ title: "My TripGenie trip", text: `Check out my ${input.days}-day trip to ${input.destination}!`, url: window.location.href }).catch(() => {});
-                  } else if (typeof navigator !== "undefined") {
-                    navigator.clipboard?.writeText(window.location.href);
-                    toast.success("Link copied to clipboard");
-                  }
-                }}>
-                  <Share2 className="mr-2 h-4 w-4" /> Share Trip
-                </Button>
-              </div>
-            </div>
           </div>
         </div>
       </div>
@@ -508,30 +649,47 @@ function ResultsDashboard({ input, plan, setPlan }: { input: TripInput; plan: Pl
   );
 }
 
-function Chip({ icon: Icon, children }: { icon?: typeof Calendar; children: React.ReactNode }) {
+// ---------------- UI helpers ----------------
+function HeroChip({ icon: Icon, children }: { icon?: typeof Calendar; children: React.ReactNode }) {
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-full bg-card border border-border px-3 py-1 text-xs font-medium">
-      {Icon && <Icon className="h-3.5 w-3.5 text-primary" />}
-      {children}
+    <span className="inline-flex items-center gap-1.5 rounded-full bg-white/15 backdrop-blur border border-white/20 px-3 py-1 text-xs font-medium text-white">
+      {Icon && <Icon className="h-3.5 w-3.5" />}{children}
     </span>
   );
 }
 
-function StatCard({ icon: Icon, label, value, accent, small }: { icon: typeof Wallet; label: string; value: string; accent?: string; small?: boolean }) {
+function ScoreCard({ icon: Icon, label, value, suffix, color }: { icon: typeof Wallet; label: string; value: string; suffix: string; color: string }) {
   return (
-    <div className="rounded-2xl border border-border bg-card p-5 shadow-soft hover:shadow-elegant transition-all">
-      <div className="flex items-center gap-2 text-xs text-muted-foreground font-medium uppercase tracking-wide">
-        <Icon className="h-4 w-4" />
-        {label}
+    <div className={cn("rounded-2xl p-5 shadow-soft hover:shadow-elegant hover:-translate-y-0.5 transition-all text-white bg-gradient-to-br", color)}>
+      <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide opacity-90">
+        <Icon className="h-4 w-4" />{label}
       </div>
-      <div className={cn("mt-2 font-bold font-display", small ? "text-sm" : "text-2xl", accent)}>{value}</div>
+      <div className="mt-2 font-black font-display text-3xl">
+        {value}<span className="text-sm font-medium opacity-80">{suffix}</span>
+      </div>
     </div>
   );
 }
 
-function Section({ title, icon: Icon, children, compact }: { title: string; icon: typeof Calendar; children: React.ReactNode; compact?: boolean }) {
+function MiniStat({ icon: Icon, label, value }: { icon: typeof Wallet; label: string; value: string }) {
   return (
-    <section className={cn("rounded-3xl border border-border bg-card shadow-soft animate-fade-in", compact ? "p-5" : "p-6 sm:p-7")}>
+    <div className="rounded-xl border border-border bg-card p-3 hover:shadow-soft transition-all">
+      <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide font-semibold text-muted-foreground">
+        <Icon className="h-3.5 w-3.5 text-primary" />{label}
+      </div>
+      <div className="mt-1 font-bold text-sm truncate">{value}</div>
+    </div>
+  );
+}
+
+function Section({ title, icon: Icon, children, compact, className, gradient }: { title: string; icon: typeof Calendar; children: React.ReactNode; compact?: boolean; className?: string; gradient?: boolean }) {
+  return (
+    <section className={cn(
+      "rounded-3xl border border-border shadow-soft animate-fade-in",
+      gradient ? "bg-gradient-hero" : "bg-card",
+      compact ? "p-5" : "p-6 sm:p-7",
+      className,
+    )}>
       <h3 className="flex items-center gap-2 font-semibold text-lg mb-5">
         <span className="grid h-8 w-8 place-items-center rounded-lg bg-primary/10">
           <Icon className="h-4 w-4 text-primary" />
@@ -552,19 +710,129 @@ function TimeBlock({ label, text }: { label: string; text: string }) {
   );
 }
 
+function WeatherStat({ icon: Icon, label, value }: { icon: typeof Wallet; label: string; value: string }) {
+  return (
+    <div className="rounded-lg bg-card/70 border border-border px-3 py-2 flex items-center gap-2">
+      <Icon className="h-4 w-4 text-primary shrink-0" />
+      <div className="min-w-0">
+        <div className="text-[10px] uppercase text-muted-foreground font-semibold tracking-wide">{label}</div>
+        <div className="text-sm font-bold tabular-nums">{value}</div>
+      </div>
+    </div>
+  );
+}
+
+const AMENITY_ICONS: Record<string, typeof Wifi> = {
+  Pool: Waves, WiFi: Wifi, Breakfast: Coffee, Parking: CarIcon, Gym: TrendingUp, Bar: UtensilsCrossed,
+};
+
+function HotelCard({ h, currency }: { h: Hotel; currency: Currency }) {
+  return (
+    <div className="group rounded-2xl border border-border bg-card overflow-hidden hover:shadow-elegant hover:-translate-y-1 transition-all">
+      <div className="relative aspect-video overflow-hidden">
+        <img src={h.image} alt={h.name} className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-500" loading="lazy" />
+        <span className="absolute top-2 left-2 rounded-full bg-card/90 backdrop-blur px-2.5 py-0.5 text-[10px] font-semibold shadow-soft">{h.tag}</span>
+        <span className="absolute top-2 right-2 rounded-full bg-black/60 text-white backdrop-blur px-2 py-0.5 text-[10px] font-bold inline-flex items-center gap-1">
+          <Star className="h-3 w-3 fill-yellow-400 text-yellow-400" />{h.rating}
+        </span>
+      </div>
+      <div className="p-4">
+        <h4 className="font-semibold text-sm truncate">{h.name}</h4>
+        <div className="mt-0.5 text-xs text-muted-foreground">{h.area} · {h.distance}</div>
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {h.amenities.map((a) => {
+            const Icon = AMENITY_ICONS[a] ?? Check;
+            return (
+              <span key={a} className="inline-flex items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-[10px] font-medium">
+                <Icon className="h-3 w-3 text-primary" />{a}
+              </span>
+            );
+          })}
+        </div>
+        <div className="mt-3 flex items-center justify-between">
+          <div className="text-sm font-bold text-primary">{formatMoney(h.price, currency)}<span className="text-[10px] text-muted-foreground font-normal"> /night</span></div>
+          <Button size="sm" variant="outline" className="h-7 text-[11px] px-2.5">Book later</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RestaurantCard({ r, currency }: { r: Restaurant; currency: Currency }) {
+  return (
+    <div className="group rounded-2xl border border-border bg-card overflow-hidden hover:shadow-elegant hover:-translate-y-1 transition-all">
+      <div className="relative aspect-video overflow-hidden">
+        <img src={r.image} alt={r.name} className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-500" loading="lazy" />
+        <span className="absolute top-2 left-2 rounded-full bg-card/90 backdrop-blur px-2.5 py-0.5 text-[10px] font-semibold">{r.cuisine}</span>
+        {r.veg && (
+          <span className="absolute top-2 right-2 rounded-full bg-emerald-500 text-white px-2 py-0.5 text-[10px] font-bold">🌱 Veg</span>
+        )}
+      </div>
+      <div className="p-4">
+        <div className="flex items-center justify-between gap-2">
+          <h4 className="font-semibold text-sm truncate">{r.name}</h4>
+          <span className="inline-flex items-center gap-1 text-xs shrink-0"><Star className="h-3 w-3 fill-yellow-500 text-yellow-500" />{r.rating}</span>
+        </div>
+        <div className="mt-2 text-[11px] text-muted-foreground">
+          Popular: <span className="text-foreground/80">{r.dishes.join(", ")}</span>
+        </div>
+        <div className="mt-3 text-sm font-bold text-primary">
+          ~ {formatMoney(r.cost, currency)}<span className="text-[10px] text-muted-foreground font-normal"> /person</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AttractionCard({ a, currency }: { a: Attraction; currency: Currency }) {
+  return (
+    <div className="group rounded-2xl border border-border bg-card overflow-hidden hover:shadow-elegant hover:-translate-y-1 transition-all">
+      <div className="relative aspect-video overflow-hidden">
+        <img src={a.image} alt={a.name} className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-500" loading="lazy" />
+        <span className="absolute top-2 left-2 rounded-full bg-card/90 backdrop-blur px-2.5 py-0.5 text-[10px] font-semibold">{a.type}</span>
+      </div>
+      <div className="p-4">
+        <h4 className="font-semibold text-sm">{a.name}</h4>
+        <p className="mt-1 text-xs text-muted-foreground leading-relaxed line-clamp-2">{a.desc}</p>
+        <div className="mt-3 grid grid-cols-2 gap-2 text-[11px]">
+          <div className="rounded-lg bg-secondary/60 px-2 py-1.5">
+            <div className="text-muted-foreground text-[10px] uppercase font-semibold">Hours</div>
+            <div className="font-medium">{a.hours}</div>
+          </div>
+          <div className="rounded-lg bg-secondary/60 px-2 py-1.5">
+            <div className="text-muted-foreground text-[10px] uppercase font-semibold">Entry</div>
+            <div className="font-medium">{a.fee === 0 ? "Free" : formatMoney(a.fee, currency)}</div>
+          </div>
+          <div className="rounded-lg bg-secondary/60 px-2 py-1.5">
+            <div className="text-muted-foreground text-[10px] uppercase font-semibold">Duration</div>
+            <div className="font-medium">{a.duration}</div>
+          </div>
+          <div className="rounded-lg bg-secondary/60 px-2 py-1.5">
+            <div className="text-muted-foreground text-[10px] uppercase font-semibold">Best time</div>
+            <div className="font-medium">{a.bestTime}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ---------------- Chat Assistant ----------------
 type Msg = { role: "user" | "bot"; text: string };
 
 const SUGGESTIONS = [
   "Reduce my budget",
   "Add adventure activities",
-  "Make it family friendly",
-  "Suggest hidden gems",
   "Add nightlife",
-  "Add vegetarian restaurants",
+  "Make it kid friendly",
+  "Suggest vegetarian restaurants",
+  "Avoid crowded places",
+  "Shorten the trip",
+  "Luxury version",
+  "Budget version",
 ];
 
-function ChatAssistant({ plan, setPlan }: { plan: Plan; setPlan: (p: Plan) => void }) {
+function ChatAssistant({ plan, setPlan, currency }: { plan: Plan; setPlan: (p: Plan) => void; currency: Currency }) {
   const [messages, setMessages] = useState<Msg[]>([
     { role: "bot", text: "Hi! I'm your AI trip assistant. Ask me to tweak anything — budget, vibe, activities, food. What should we adjust?" },
   ]);
@@ -583,16 +851,16 @@ function ChatAssistant({ plan, setPlan }: { plan: Plan; setPlan: (p: Plan) => vo
     setText("");
     setTyping(true);
     setTimeout(() => {
-      const { reply, updated } = applyToPlan(trimmed, plan);
+      const { reply, updated } = applyToPlan(trimmed, plan, currency);
       if (updated) setPlan(updated);
       setMessages((m) => [...m, { role: "bot", text: reply }]);
       setTyping(false);
       if (updated) toast.success("Itinerary updated");
-    }, 900);
+    }, 800);
   };
 
   return (
-    <div className="rounded-3xl border border-border bg-card shadow-soft overflow-hidden flex flex-col h-[520px]">
+    <div className="rounded-3xl border border-border bg-card shadow-soft overflow-hidden flex flex-col h-[560px]">
       <div className="border-b border-border p-4 flex items-center gap-3 bg-gradient-hero">
         <div className="grid h-9 w-9 place-items-center rounded-xl bg-gradient-primary shadow-soft">
           <Bot className="h-5 w-5 text-primary-foreground" />
@@ -657,39 +925,69 @@ function ChatAssistant({ plan, setPlan }: { plan: Plan; setPlan: (p: Plan) => vo
   );
 }
 
-function applyToPlan(q: string, plan: Plan): { reply: string; updated: Plan | null } {
+function applyToPlan(q: string, plan: Plan, _currency: Currency): { reply: string; updated: Plan | null } {
   const l = q.toLowerCase();
+
+  if (l.includes("shorten")) {
+    if (plan.days.length <= 2) return { reply: "Trip is already at minimum length.", updated: null };
+    return { reply: "Trimmed the last day and rebalanced the highlights.", updated: { ...plan, days: plan.days.slice(0, -1) } };
+  }
+
+  if (l.includes("luxury")) {
+    const factor = 1.5;
+    return {
+      reply: "Upgraded to luxury: 5-star boutique stays, chef's tasting menus, and private guided tours.",
+      updated: {
+        ...plan,
+        totalCost: Math.round(plan.totalCost * factor),
+        budget: plan.budget.map((b) => ({ ...b, amount: Math.round(b.amount * factor) })),
+        hotels: plan.hotels.map((h) => ({ ...h, price: Math.round(h.price * 1.8), tag: "Luxury" })),
+      },
+    };
+  }
 
   if (l.includes("budget") || l.includes("cheap") || l.includes("reduce")) {
     const newTotal = Math.round(plan.totalCost * 0.8);
-    const updated: Plan = {
-      ...plan,
-      totalCost: newTotal,
-      budget: plan.budget.map((b) => ({ ...b, amount: Math.round(newTotal * (b.pct / 100)) })),
-      hotels: plan.hotels.map((h) => ({ ...h, price: Math.round(h.price * 0.75) })),
+    return {
+      reply: "Trimmed budget by ~20%: swapped a boutique stay for a highly-rated guesthouse and added two free walking tours.",
+      updated: {
+        ...plan, totalCost: newTotal,
+        budget: plan.budget.map((b) => ({ ...b, amount: Math.round(newTotal * (b.pct / 100)) })),
+        hotels: plan.hotels.map((h) => ({ ...h, price: Math.round(h.price * 0.75) })),
+      },
     };
-    return { reply: "I've trimmed your budget by ~20%. Swapped a boutique stay for a highly-rated guesthouse and added two free walking tours. Daily food budget still covers memorable meals.", updated };
   }
 
   if (l.includes("adventure")) {
-    const extra: Day[] = [
-      { title: "Adventure Day", morning: "Sunrise kayaking along the coast with a local guide.", afternoon: "Full-day hiking trail with panoramic viewpoints and a waterfall lunch stop.", evening: "Sunset paragliding session — book the tandem flight for beginners.", highlight: "Adrenaline day" },
-    ];
+    const extra: Day = { title: "Adventure Day", morning: "Sunrise kayaking with a local guide.", afternoon: "Full-day hike with waterfall lunch stop.", evening: "Sunset paragliding — tandem option for beginners.", highlight: "Adrenaline day" };
+    return { reply: "Added kayaking, a hike, and paragliding. Pack good shoes!", updated: { ...plan, days: [...plan.days, extra] } };
+  }
+
+  if (l.includes("kid") || l.includes("family")) {
     return {
-      reply: "Added kayaking, a full-day hike, and a sunset paragliding session. Difficulty updated to Moderate — pack good shoes!",
-      updated: { ...plan, difficulty: "Moderate", days: [...plan.days, ...extra] },
+      reply: "Reworked for families: hands-on cooking class, wildlife park, and a kid-friendly resort with a pool.",
+      updated: {
+        ...plan, familyScore: Math.min(98, plan.familyScore + 10),
+        hotels: [{ ...plan.hotels[0], name: "Family Cove Resort", area: "Beachfront", tag: "Kids club & pool", amenities: ["Pool", "WiFi", "Breakfast", "Parking"] }, ...plan.hotels.slice(1)],
+      },
     };
   }
 
-  if (l.includes("family")) {
-    return {
-      reply: "Reworked for families: added a hands-on cooking class, a wildlife park visit, and swapped late nights for sunrise activities. Hotel changed to a kid-friendly resort with a pool.",
-      updated: {
-        ...plan,
-        hotels: [{ name: "Family Cove Resort", rating: 4.7, price: plan.hotels[0].price, area: "Beachfront", tag: "Kids club & pool" }, ...plan.hotels.slice(1)],
-        tips: ["Ask hotels about kids' menus and cribs on booking.", "Carry snacks and water — kids get hungry between meals.", ...plan.tips],
-      },
-    };
+  if (l.includes("night")) {
+    const extra: Day = { title: "Nightlife & Live Music", morning: "Slow brunch at a rooftop cafe.", afternoon: "Vinyl shops and cocktail-making workshop.", evening: "Live jazz venue, then a rooftop bar tour.", highlight: "Late night pick" };
+    return { reply: "Nightlife added: live music, rooftop cocktails, and a club district walk.", updated: { ...plan, days: [...plan.days, extra] } };
+  }
+
+  if (l.includes("veg")) {
+    const extras: Restaurant[] = [
+      { name: "Green Bowl Kitchen", cuisine: "Vegetarian", rating: 4.7, cost: 18, dishes: ["Buddha bowl", "Miso soup"], veg: true, image: img("veg-1") },
+      { name: "Herb & Grain", cuisine: "Plant-based", rating: 4.8, cost: 22, dishes: ["Cauliflower steak", "Tahini bowl"], veg: true, image: img("veg-2") },
+    ];
+    return { reply: "Added two top-rated vegetarian spots to your list.", updated: { ...plan, restaurants: [...extras, ...plan.restaurants] } };
+  }
+
+  if (l.includes("crowd") || l.includes("avoid")) {
+    return { reply: "Rescheduled crowded spots for early morning and swapped one busy market for a quieter neighborhood tour.", updated: { ...plan, crowd: "Low" } };
   }
 
   if (l.includes("hidden") || l.includes("gem")) {
@@ -697,30 +995,8 @@ function applyToPlan(q: string, plan: Plan): { reply: string; updated: Plan | nu
       { name: "The Blue Door Speakeasy", desc: "Unmarked bar behind a florist — password changes weekly." },
       { name: "Sunset Wall at Fort Ridge", desc: "10-min uphill walk from the last metro stop. Locals only." },
     ];
-    return {
-      reply: "Loving this! Slipped in two more local favorites — a hidden speakeasy and a sunset wall the guidebooks don't cover.",
-      updated: { ...plan, hiddenGems: [...plan.hiddenGems, ...extras] },
-    };
+    return { reply: "Slipped in two more local favorites — a hidden speakeasy and a sunset wall.", updated: { ...plan, hiddenGems: [...plan.hiddenGems, ...extras] } };
   }
 
-  if (l.includes("night")) {
-    const extra: Day = { title: "Nightlife & Live Music", morning: "Slow start — brunch at a rooftop cafe with skyline views.", afternoon: "Vinyl record shops and a curated cocktail-making workshop.", evening: "Live jazz venue, then a rooftop cocktail bar tour through the club district.", highlight: "Late night pick" };
-    return {
-      reply: "Nightlife added: a live music venue, a rooftop cocktail tour, and a curated club district walk with an optional after-hours spot.",
-      updated: { ...plan, days: [...plan.days, extra] },
-    };
-  }
-
-  if (l.includes("veg")) {
-    const extras = [
-      { name: "Verde Plant Kitchen", type: "Vegan tasting", note: "8-course seasonal menu — book online.", veg: true },
-      { name: "Green Leaf Market", type: "Farmers market", note: "Sunday only, incredible produce and street snacks.", veg: true },
-    ];
-    return {
-      reply: "Added five vegetarian-friendly spots including a plant-based tasting menu and a farmer's market with amazing produce. Existing recs marked where they have veg options.",
-      updated: { ...plan, foods: [...plan.foods, ...extras] },
-    };
-  }
-
-  return { reply: "Got it — noted for your itinerary. You can also ask me to reduce the budget, add adventure or nightlife, go family-friendly, add vegetarian spots, or surface more hidden gems.", updated: null };
+  return { reply: "Try: 'reduce budget', 'add adventure', 'add nightlife', 'make it kid friendly', 'suggest vegetarian restaurants', 'avoid crowded places', 'shorten the trip', 'luxury version'.", updated: null };
 }
