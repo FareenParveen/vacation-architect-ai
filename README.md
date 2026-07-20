@@ -42,4 +42,4 @@ TripGenie AI is an AI-powered travel planning application that generates persona
 
 ## Author
 
-**Fareen Jawed**
+**Fareen Parveen**
